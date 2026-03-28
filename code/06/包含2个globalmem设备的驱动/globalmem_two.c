@@ -6,308 +6,298 @@
     The initial developer of the original code is Baohua Song
     <author@linuxdriver.cn>. All Rights Reserved.
 ======================================================================*/
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/fs.h>
-#include <linux/errno.h>
-#include <linux/init.h>
 #include <linux/cdev.h>
+#include <linux/errno.h>
+#include <linux/fs.h>
+#include <linux/init.h>
 #include <linux/ioctl.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
+#include <linux/types.h>
 #include <linux/uaccess.h>
 
-#define GLOBALMEM_SIZE	0x1000	/*全局内存最大4K字节*/
-#define GLOBALMEM_MAJOR 254    /*预设的globalmem的主设备号*/
+#define GLOBALMEM_SIZE		0x1000
+#define GLOBALMEM_DEVICE_COUNT	2
+#define GLOBALMEM_MAJOR		254
 
-#define GLOBALMEM_IOC_MAGIC 'g'
+#define GLOBALMEM_IOC_MAGIC	'g'
 
-/* 不带参数，直接清空设备内存 */
+/* No payload: clear the whole device buffer. */
 #define GLOBALMEM_IOCTL_CLEAR \
-  _IO(GLOBALMEM_IOC_MAGIC, 0)
-/* 驱动把设备大小返回给用户 */
+	_IO(GLOBALMEM_IOC_MAGIC, 0)
+/* Read-only payload: return device size to userspace. */
 #define GLOBALMEM_IOCTL_GET_SIZE \
-  _IOR(GLOBALMEM_IOC_MAGIC, 1, int)
-/* 用户传入 1 个字节，用该字节填充整个设备内存 */
+	_IOR(GLOBALMEM_IOC_MAGIC, 1, int)
+/* Write-only payload: fill the whole device buffer with one byte. */
 #define GLOBALMEM_IOCTL_SET_FILL \
-  _IOW(GLOBALMEM_IOC_MAGIC, 2, unsigned char)
-/* 用户传入 index/value，驱动写入新值并把旧值带回用户 */
+	_IOW(GLOBALMEM_IOC_MAGIC, 2, unsigned char)
+/* Read/write payload: write a byte and return the old value. */
 #define GLOBALMEM_IOCTL_EXCHANGE_BYTE \
-  _IOWR(GLOBALMEM_IOC_MAGIC, 3, struct globalmem_ioc_byte)
-/* 直接用 _IOC 展示底层编码方式，语义与 EXCHANGE_BYTE 一致 */
+	_IOWR(GLOBALMEM_IOC_MAGIC, 3, struct globalmem_ioc_byte)
+/* Raw _IOC example: same semantics as EXCHANGE_BYTE. */
 #define GLOBALMEM_IOCTL_RAW_EXCHANGE_BYTE \
-  _IOC(_IOC_READ | _IOC_WRITE, GLOBALMEM_IOC_MAGIC, 4, \
-    sizeof(struct globalmem_ioc_byte))
+	_IOC(_IOC_READ | _IOC_WRITE, GLOBALMEM_IOC_MAGIC, 4, \
+	     sizeof(struct globalmem_ioc_byte))
 
-#define GLOBALMEM_IOC_MAXNR 4
+#define GLOBALMEM_IOC_MAXNR	4
 
-struct globalmem_ioc_byte
-{
-  unsigned int index;
-  unsigned char value;
+struct globalmem_ioc_byte {
+	unsigned int index;
+	unsigned char value;
+};
+
+struct globalmem_dev {
+	struct cdev cdev;
+	struct mutex lock;
+	unsigned char mem[GLOBALMEM_SIZE];
 };
 
 static int globalmem_major = GLOBALMEM_MAJOR;
-/*globalmem设备结构体*/
-struct globalmem_dev
-{
-  struct cdev cdev; /*cdev结构体*/
-  unsigned char mem[GLOBALMEM_SIZE]; /*全局内存*/
-};
+module_param(globalmem_major, int, 0444);
 
-struct globalmem_dev *globalmem_devp; /*设备结构体指针*/
-/*文件打开函数*/
-int globalmem_open(struct inode *inode, struct file *filp)
-{
-  /*将设备结构体指针赋值给文件私有数据指针*/
-  struct globalmem_dev *dev;
+static struct globalmem_dev *globalmem_devp;
 
-  dev = container_of(inode->i_cdev,struct globalmem_dev,cdev);
-  filp->private_data = dev;
-  return 0;
-}
-/*文件释放函数*/
-int globalmem_release(struct inode *inode, struct file *filp)
+static int globalmem_open(struct inode *inode, struct file *filp)
 {
-  return 0;
+	struct globalmem_dev *dev;
+
+	dev = container_of(file_inode(filp)->i_cdev, struct globalmem_dev, cdev);
+	filp->private_data = dev;
+
+	return 0;
 }
 
-/* ioctl设备控制函数 */
+static int globalmem_release(struct inode *inode, struct file *filp)
+{
+	return 0;
+}
+
+static long globalmem_ioctl_exchange_byte(struct globalmem_dev *dev,
+					  void __user *argp)
+{
+	struct globalmem_ioc_byte data;
+	unsigned char old_value;
+
+	if (copy_from_user(&data, argp, sizeof(data)))
+		return -EFAULT;
+
+	if (data.index >= GLOBALMEM_SIZE)
+		return -EINVAL;
+
+	mutex_lock(&dev->lock);
+	old_value = dev->mem[data.index];
+	dev->mem[data.index] = data.value;
+	data.value = old_value;
+	mutex_unlock(&dev->lock);
+
+	if (copy_to_user(argp, &data, sizeof(data)))
+		return -EFAULT;
+
+	return 0;
+}
+
 static long globalmem_ioctl(struct file *filp, unsigned int cmd,
-  unsigned long arg)
+			    unsigned long arg)
 {
-  struct globalmem_dev *dev = filp->private_data;/*获得设备结构体指针*/
-  void __user *argp = (void __user *)arg;
+	struct globalmem_dev *dev = filp->private_data;
+	void __user *argp = (void __user *)arg;
 
-  if (_IOC_TYPE(cmd) != GLOBALMEM_IOC_MAGIC)
-    return -ENOTTY;
-  if (_IOC_NR(cmd) > GLOBALMEM_IOC_MAXNR)
-    return -ENOTTY;
+	if (_IOC_TYPE(cmd) != GLOBALMEM_IOC_MAGIC || _IOC_NR(cmd) > GLOBALMEM_IOC_MAXNR)
+		return -ENOTTY;
 
-  switch (cmd)
-  {
-    case GLOBALMEM_IOCTL_CLEAR:
-      memset(dev->mem, 0, GLOBALMEM_SIZE);
-      printk(KERN_INFO "globalmem is set to zero\n");
-      break;
+	switch (cmd) {
+	case GLOBALMEM_IOCTL_CLEAR:
+		mutex_lock(&dev->lock);
+		memset(dev->mem, 0, sizeof(dev->mem));
+		mutex_unlock(&dev->lock);
+		pr_info("globalmem: cleared device buffer\n");
+		return 0;
 
-    case GLOBALMEM_IOCTL_GET_SIZE:
-    {
-      int size = GLOBALMEM_SIZE;
+	case GLOBALMEM_IOCTL_GET_SIZE: {
+		int size = GLOBALMEM_SIZE;
 
-      if (copy_to_user(argp, &size, sizeof(size)))
-        return -EFAULT;
-      break;
-    }
+		if (copy_to_user(argp, &size, sizeof(size)))
+			return -EFAULT;
+		return 0;
+	}
 
-    case GLOBALMEM_IOCTL_SET_FILL:
-    {
-      unsigned char value;
+	case GLOBALMEM_IOCTL_SET_FILL: {
+		unsigned char value;
 
-      if (copy_from_user(&value, argp, sizeof(value)))
-        return -EFAULT;
-      memset(dev->mem, value, GLOBALMEM_SIZE);
-      break;
-    }
+		if (copy_from_user(&value, argp, sizeof(value)))
+			return -EFAULT;
 
-    case GLOBALMEM_IOCTL_EXCHANGE_BYTE:
-    case GLOBALMEM_IOCTL_RAW_EXCHANGE_BYTE:
-    {
-      struct globalmem_ioc_byte data;
-      unsigned char old_value;
+		mutex_lock(&dev->lock);
+		memset(dev->mem, value, sizeof(dev->mem));
+		mutex_unlock(&dev->lock);
+		return 0;
+	}
 
-      if (copy_from_user(&data, argp, sizeof(data)))
-        return -EFAULT;
-      if (data.index >= GLOBALMEM_SIZE)
-        return -EINVAL;
+	case GLOBALMEM_IOCTL_EXCHANGE_BYTE:
+	case GLOBALMEM_IOCTL_RAW_EXCHANGE_BYTE:
+		return globalmem_ioctl_exchange_byte(dev, argp);
 
-      old_value = dev->mem[data.index];
-      dev->mem[data.index] = data.value;
-      data.value = old_value;
-
-      if (copy_to_user(argp, &data, sizeof(data)))
-        return -EFAULT;
-      break;
-    }
-
-    default:
-      return -ENOTTY;
-  }
-  return 0;
+	default:
+		return -ENOTTY;
+	}
 }
 
-/*读函数*/
-static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t size,
-  loff_t *ppos)
+static ssize_t globalmem_read(struct file *filp, char __user *buf, size_t count,
+			      loff_t *ppos)
 {
-  unsigned long p =  *ppos;
-  unsigned int count = size;
-  int ret = 0;
-  struct globalmem_dev *dev = filp->private_data; /*获得设备结构体指针*/
+	struct globalmem_dev *dev = filp->private_data;
+	loff_t pos = *ppos;
 
-  /*分析和获取有效的写长度*/
-  if (p >= GLOBALMEM_SIZE)
-    return count ?  - ENXIO: 0;
-  if (count > GLOBALMEM_SIZE - p)
-    count = GLOBALMEM_SIZE - p;
+	if (pos < 0)
+		return -EINVAL;
+	if (pos >= GLOBALMEM_SIZE)
+		return 0;
 
-  /*内核空间->用户空间*/
-  if (copy_to_user(buf, (void*)(dev->mem + p), count))
-  {
-    ret =  - EFAULT;
-  }
-  else
-  {
-    *ppos += count;
-    ret = count;
+	if (count > GLOBALMEM_SIZE - pos)
+		count = GLOBALMEM_SIZE - pos;
 
-    printk(KERN_INFO "read %u bytes(s) from %lu\n", count, p);
-  }
+	mutex_lock(&dev->lock);
+	if (copy_to_user(buf, dev->mem + pos, count)) {
+		mutex_unlock(&dev->lock);
+		return -EFAULT;
+	}
+	mutex_unlock(&dev->lock);
 
-  return ret;
+	*ppos = pos + count;
+	pr_info("globalmem: read %zu bytes at offset %lld\n", count, pos);
+
+	return count;
 }
 
-/*写函数*/
 static ssize_t globalmem_write(struct file *filp, const char __user *buf,
-  size_t size, loff_t *ppos)
+			       size_t count, loff_t *ppos)
 {
-  unsigned long p =  *ppos;
-  unsigned int count = size;
-  int ret = 0;
-  struct globalmem_dev *dev = filp->private_data; /*获得设备结构体指针*/
+	struct globalmem_dev *dev = filp->private_data;
+	loff_t pos = *ppos;
 
-  /*分析和获取有效的写长度*/
-  if (p >= GLOBALMEM_SIZE)
-    return count ?  - ENXIO: 0;
-  if (count > GLOBALMEM_SIZE - p)
-    count = GLOBALMEM_SIZE - p;
+	if (pos < 0)
+		return -EINVAL;
+	if (pos >= GLOBALMEM_SIZE)
+		return -ENOSPC;
 
-  /*用户空间->内核空间*/
-  if (copy_from_user(dev->mem + p, buf, count))
-    ret =  - EFAULT;
-  else
-  {
-    *ppos += count;
-    ret = count;
+	if (count > GLOBALMEM_SIZE - pos)
+		count = GLOBALMEM_SIZE - pos;
 
-    printk(KERN_INFO "written %u bytes(s) from %lu\n", count, p);
-  }
+	mutex_lock(&dev->lock);
+	if (copy_from_user(dev->mem + pos, buf, count)) {
+		mutex_unlock(&dev->lock);
+		return -EFAULT;
+	}
+	mutex_unlock(&dev->lock);
 
-  return ret;
+	*ppos = pos + count;
+	pr_info("globalmem: wrote %zu bytes at offset %lld\n", count, pos);
+
+	return count;
 }
 
-/* seek文件定位函数 */
-static loff_t globalmem_llseek(struct file *filp, loff_t offset, int orig)
+static loff_t globalmem_llseek(struct file *filp, loff_t offset, int whence)
 {
-  loff_t ret = 0;
-  switch (orig)
-  {
-    case 0:   /*相对文件开始位置偏移*/
-      if (offset < 0)
-      {
-        ret =  - EINVAL;
-        break;
-      }
-      if ((unsigned int)offset > GLOBALMEM_SIZE)
-      {
-        ret =  - EINVAL;
-        break;
-      }
-      filp->f_pos = (unsigned int)offset;
-      ret = filp->f_pos;
-      break;
-    case 1:   /*相对文件当前位置偏移*/
-      if ((filp->f_pos + offset) > GLOBALMEM_SIZE)
-      {
-        ret =  - EINVAL;
-        break;
-      }
-      if ((filp->f_pos + offset) < 0)
-      {
-        ret =  - EINVAL;
-        break;
-      }
-      filp->f_pos += offset;
-      ret = filp->f_pos;
-      break;
-    default:
-      ret =  - EINVAL;
-      break;
-  }
-  return ret;
+	loff_t new_pos;
+
+	switch (whence) {
+	case SEEK_SET:
+		new_pos = offset;
+		break;
+	case SEEK_CUR:
+		new_pos = filp->f_pos + offset;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (new_pos < 0 || new_pos > GLOBALMEM_SIZE)
+		return -EINVAL;
+
+	filp->f_pos = new_pos;
+	return new_pos;
 }
 
-/*文件操作结构体*/
-static const struct file_operations globalmem_fops =
-{
-  .owner = THIS_MODULE,
-  .llseek = globalmem_llseek,
-  .read = globalmem_read,
-  .write = globalmem_write,
-  .unlocked_ioctl = globalmem_ioctl,
-  .open = globalmem_open,
-  .release = globalmem_release,
+static const struct file_operations globalmem_fops = {
+	.owner		= THIS_MODULE,
+	.open		= globalmem_open,
+	.release	= globalmem_release,
+	.llseek		= globalmem_llseek,
+	.read		= globalmem_read,
+	.write		= globalmem_write,
+	.unlocked_ioctl	= globalmem_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= globalmem_ioctl,
+#endif
 };
 
-/*初始化并注册cdev*/
-static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
+static int globalmem_setup_cdev(struct globalmem_dev *dev, dev_t devno)
 {
-  int err, devno = MKDEV(globalmem_major, index);
+	cdev_init(&dev->cdev, &globalmem_fops);
+	dev->cdev.owner = THIS_MODULE;
 
-  cdev_init(&dev->cdev, &globalmem_fops);
-  dev->cdev.owner = THIS_MODULE;
-  dev->cdev.ops = &globalmem_fops;
-  err = cdev_add(&dev->cdev, devno, 1);
-  if (err)
-    printk(KERN_NOTICE "Error %d adding LED%d", err, index);
+	return cdev_add(&dev->cdev, devno, 1);
 }
 
-/*设备驱动模块加载函数*/
-int globalmem_init(void)
+static int __init globalmem_init(void)
 {
-  int result;
-  dev_t devno = MKDEV(globalmem_major, 0);
+	dev_t devno = MKDEV(globalmem_major, 0);
+	int ret;
+	int i;
 
-  /* 申请设备号*/
-  if (globalmem_major)
-    result = register_chrdev_region(devno, 2, "globalmem");
-  else  /* 动态申请设备号 */
-  {
-    result = alloc_chrdev_region(&devno, 0, 2, "globalmem");
-    globalmem_major = MAJOR(devno);
-  }
-  if (result < 0)
-    return result;
+	if (globalmem_major) {
+		ret = register_chrdev_region(devno, GLOBALMEM_DEVICE_COUNT, "globalmem");
+	} else {
+		ret = alloc_chrdev_region(&devno, 0, GLOBALMEM_DEVICE_COUNT,
+					  "globalmem");
+		globalmem_major = MAJOR(devno);
+	}
+	if (ret)
+		return ret;
 
-  /* 动态申请2个设备结构体的内存*/
-  globalmem_devp = kmalloc(2*sizeof(struct globalmem_dev), GFP_KERNEL);
-  if (!globalmem_devp)    /*申请失败*/
-  {
-    result =  - ENOMEM;
-    goto fail_malloc;
-  }
-  memset(globalmem_devp, 0, 2*sizeof(struct globalmem_dev));
+	globalmem_devp = kcalloc(GLOBALMEM_DEVICE_COUNT, sizeof(*globalmem_devp),
+				 GFP_KERNEL);
+	if (!globalmem_devp) {
+		ret = -ENOMEM;
+		goto err_unregister_region;
+	}
 
-  globalmem_setup_cdev(&globalmem_devp[0], 0);
-  globalmem_setup_cdev(&globalmem_devp[1], 1);
-  return 0;
+	for (i = 0; i < GLOBALMEM_DEVICE_COUNT; i++) {
+		mutex_init(&globalmem_devp[i].lock);
+		ret = globalmem_setup_cdev(&globalmem_devp[i],
+					   MKDEV(globalmem_major, i));
+		if (ret)
+			goto err_del_cdevs;
+	}
 
-  fail_malloc: unregister_chrdev_region(devno, 1);
-  return result;
+	pr_info("globalmem: registered %d devices on major %d\n",
+		GLOBALMEM_DEVICE_COUNT, globalmem_major);
+	return 0;
+
+err_del_cdevs:
+	while (--i >= 0)
+		cdev_del(&globalmem_devp[i].cdev);
+	kfree(globalmem_devp);
+err_unregister_region:
+	unregister_chrdev_region(MKDEV(globalmem_major, 0), GLOBALMEM_DEVICE_COUNT);
+	return ret;
 }
 
-/*模块卸载函数*/
-void globalmem_exit(void)
+static void __exit globalmem_exit(void)
 {
-  cdev_del(&(globalmem_devp[0].cdev));
-  cdev_del(&(globalmem_devp[1].cdev));   /*注销cdev*/
-  kfree(globalmem_devp);     /*释放设备结构体内存*/
-  unregister_chrdev_region(MKDEV(globalmem_major, 0), 2); /*释放设备号*/
+	int i;
+
+	for (i = 0; i < GLOBALMEM_DEVICE_COUNT; i++)
+		cdev_del(&globalmem_devp[i].cdev);
+
+	kfree(globalmem_devp);
+	unregister_chrdev_region(MKDEV(globalmem_major, 0), GLOBALMEM_DEVICE_COUNT);
+	pr_info("globalmem: unloaded\n");
 }
 
 MODULE_AUTHOR("Song Baohua");
 MODULE_LICENSE("Dual BSD/GPL");
-
-module_param(globalmem_major, int, S_IRUGO);
 
 module_init(globalmem_init);
 module_exit(globalmem_exit);
