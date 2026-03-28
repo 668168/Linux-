@@ -66,8 +66,9 @@ clean:
 	make -C $(LINUX_KERNEL_PATH) M=$(CURRENT_PATH) clean
 	rm -f modules.order Module.symvers Module.markers
 
-.PHNOY:
-	modules modules_install clean
+
+.PHONY: 
+	modules modules_install insmod rmmod test clean github
 
 
 
