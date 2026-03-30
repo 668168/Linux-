@@ -21,6 +21,8 @@ DRIVER_LICENSE := "Dual BSD/GPL"
 
 
 MODULE_NAME := globalmem_lock
+DEVICE_BASENAME := gatieme
+DEVICE_COUNT := 1
 
 
 
@@ -45,10 +47,19 @@ modules:
 modules_install:
 	make -C $(LINUX_KERNEL_PATH) M=$(CURRENT_PATH) modules_install
 
-insmod:
+insmod: modules
 	sudo insmod $(MODULE_NAME).ko globalmem_major=0
-	sudo mknod /dev/gatieme c 242 0
-	sudo chmod 666 /dev/gatieme
+	major=$$(awk '$$2 == "globalmem" {print $$1}' /proc/devices); \
+	if [ -z "$$major" ]; then \
+		echo "failed to find globalmem major in /proc/devices"; \
+		exit 1; \
+	fi; \
+	for minor in $$(seq 0 $$(($(DEVICE_COUNT) - 1))); do \
+		node=/dev/$(DEVICE_BASENAME)$$minor; \
+		sudo rm -f $$node; \
+		sudo mknod $$node c $$major $$minor; \
+		sudo chmod 666 $$node; \
+	done
 
 reinsmod:
 	-$(MAKE) rmmod
@@ -56,14 +67,16 @@ reinsmod:
 
 rmmod:
 	sudo rmmod $(MODULE_NAME)
-	sudo rm -rf /dev/gatieme
+	for minor in $$(seq 0 $$(($(DEVICE_COUNT) - 1))); do \
+		sudo rm -f /dev/$(DEVICE_BASENAME)$$minor; \
+	done
 
 github:
 	cd $(ROOT) && make github
 
 test: reinsmod
-	echo "gatieme" > /dev/gatieme
-	cat /dev/gatieme
+	echo "gatieme" > /dev/$(DEVICE_BASENAME)0
+	cat /dev/$(DEVICE_BASENAME)0
 
 clean:
 	make -C $(LINUX_KERNEL_PATH) M=$(CURRENT_PATH) clean

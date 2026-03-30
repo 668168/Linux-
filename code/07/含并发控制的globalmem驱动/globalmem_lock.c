@@ -13,6 +13,7 @@
 #include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/cdev.h>
+#include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/version.h>
 
@@ -31,7 +32,7 @@ struct globalmem_dev
 {
     struct cdev         cdev;                       /*  cdev结构体  */
     unsigned char       mem[GLOBALMEM_SIZE];        /*  全局内存    */
-    struct semaphore    sem;                        /*  并发控制用的信号量  */
+    struct mutex        mutex;                      /*  并发控制用的互斥锁  */
 };
 
 struct globalmem_dev    *globalmem_devp = NULL;     /*  设备结构体指针  */
@@ -79,14 +80,14 @@ static long globalmem_unlocked_ioctl(
     switch (cmd)
     {
         case MEM_CLEAR:
-            if (down_interruptible(&dev->sem))
+            if (mutex_lock_interruptible(&dev->mutex))
             {
                 return  - ERESTARTSYS;
             }
 
             memset(dev->mem, 0, GLOBALMEM_SIZE);
 
-            up(&dev->sem); //释放信号量
+            mutex_unlock(&dev->mutex); //释放互斥锁
 
             printk(KERN_INFO "globalmem is set to zero\n");
             break;
@@ -113,7 +114,7 @@ static ssize_t globalmem_read(
     /*分析和获取有效的写长度*/
     if (p >= GLOBALMEM_SIZE)
     {
-        return count ?  - ENXIO: 0;
+        return 0;
     }
 
     if (count > GLOBALMEM_SIZE - p)
@@ -121,7 +122,7 @@ static ssize_t globalmem_read(
         count = GLOBALMEM_SIZE - p;
     }
 
-    if (down_interruptible(&dev->sem))
+    if (mutex_lock_interruptible(&dev->mutex))
     {
         return  - ERESTARTSYS;
     }
@@ -139,7 +140,7 @@ static ssize_t globalmem_read(
         printk(KERN_INFO "read %u bytes(s) from %lu\n", count, p);
     }
 
-    up(&dev->sem); //释放信号量
+    mutex_unlock(&dev->mutex); //释放互斥锁
 
     return ret;
 }
@@ -159,7 +160,7 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf,
     if (count > GLOBALMEM_SIZE - p)
       count = GLOBALMEM_SIZE - p;
 
-    if (down_interruptible(&dev->sem))//获得信号量
+    if (mutex_lock_interruptible(&dev->mutex))//获得互斥锁
     {
       return  - ERESTARTSYS;
     }
@@ -173,7 +174,7 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf,
 
       printk(KERN_INFO "written %u bytes(s) from %lu\n", count, p);
     }
-    up(&dev->sem); //释放信号量
+    mutex_unlock(&dev->mutex); //释放互斥锁
     return ret;
 }
 
@@ -274,12 +275,7 @@ static int __init globalmem_init(void)
     memset(globalmem_devp, 0, sizeof(struct globalmem_dev));
 
     globalmem_setup_cdev(globalmem_devp, 0);
-//2.6.25
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 36) && !defined(init_MUTEX)
-    sema_init(&(globalmem_devp->sem), 1);
-#else
-    init_MUTEX(&(globalmem_devp->sem));   /*初始化信号量*/
-#endif
+    mutex_init(&globalmem_devp->mutex);   /*初始化互斥锁*/
 
     return 0;
 
