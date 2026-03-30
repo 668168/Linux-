@@ -24,12 +24,11 @@ MODULE_NAME := globalmem_lock
 
 
 
-ifneq ($(KERNELRELEASE),) 	# kernelspace
-
-obj-m := $(MODULE_NAME).o
-
-else						# userspace
-
+ifneq ($(KERNELRELEASE),)
+	obj-m := $(MODULE_NAME).o
+else
+	KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+	PWD := $(shell pwd)
 
 LINUX_KERNEL ?= $(shell uname -r)
 LINUX_KERNEL_PATH ?= /lib/modules/$(LINUX_KERNEL)/build
@@ -51,6 +50,10 @@ insmod:
 	sudo mknod /dev/gatieme c 242 0
 	sudo chmod 666 /dev/gatieme
 
+reinsmod:
+	-$(MAKE) rmmod
+	$(MAKE) insmod
+
 rmmod:
 	sudo rmmod $(MODULE_NAME)
 	sudo rm -rf /dev/gatieme
@@ -58,7 +61,7 @@ rmmod:
 github:
 	cd $(ROOT) && make github
 
-test :
+test: reinsmod
 	echo "gatieme" > /dev/gatieme
 	cat /dev/gatieme
 
@@ -68,9 +71,8 @@ clean:
 
 
 .PHONY: 
-	modules modules_install insmod rmmod test clean github
+	modules modules_install insmod reinsmod rmmod test clean github
 
 
 
 endif
-

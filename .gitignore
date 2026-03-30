@@ -1,0 +1,23 @@
+# Editor settings
+.vscode/
+.codex/
+
+# Kernel module build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.symvers
+*.order
+Module.symvers
+modules.order
+Module.markers
+
+# Kbuild command tracking files
+.*.cmd
+..*.cmd
+.*.o
+
+# Local test binaries
+globalmem_ioctl_test

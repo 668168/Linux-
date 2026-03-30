@@ -85,6 +85,43 @@ Because this repository is used for study, documentation changes should help fut
 - Distinguish clearly between copied example code and your own interpretation.
 - Prefer small, local explanations near the relevant example rather than long disconnected notes.
 
+## Notion Sync Workflow
+This repository uses a Notion database as the default place to collect study Q&A and any question i asked.
+
+- Default Notion database:
+  `https://www.notion.so/3fc2551a8fd5832fa33b8130c3f6e385?v=4152551a8fd582b6ba34882881cccb57&source=copy_link`
+- When the user asks a question in this repository and receives an answer, treat syncing that Q&A to the Notion database as the default follow-up behavior.
+- Unless the user says otherwise, create one new Notion page for each user question.
+- Put the user's original question into the Notion database property `Question`.
+- Put the user's question time into the Notion database property `Created`.
+- Put a concise less than 15 keywords into the Notion database property `Summary`.
+- Put the assistant's answer into the Notion page body.
+
+Each synced entry should use a consistent structure:
+
+- Database properties:
+  - `Question`: the user's original question, kept as close to the original wording as possible
+  - `Created`: the local date and time when the user asked the question
+  - `Summary`: a keyword summary within 15 Chinese characters
+- Page body:
+  - the assistant's answer
+  - include relevant repo paths when they materially help later review
+  - keep the body readable as a study note, but do not remove technical detail that changes meaning
+
+Syncing rules:
+
+- Preserve technical accuracy over verbatim transcript style.
+- Preserve the user's original question text in `Question`; only make minimal cleanup if formatting would break the field.
+- Create a new page for every new user question instead of appending to a daily page.
+- Run Notion syncing silently by default.
+- Do not mention successful Notion syncing in normal answers unless the user explicitly asks about it.
+- If the target database does not have `Question`, `Created`, or `Summary`, tell the user briefly and continue answering normally.
+- If Notion is unavailable or the target cannot be written, tell the user briefly and continue answering normally.
+
+after Syncing:
+ - if succeeded , do not notify me you have sync to notion.
+ - if fail, notify me.
+ 
 ## Commit Guidelines
 Use short, imperative commit messages such as:
 

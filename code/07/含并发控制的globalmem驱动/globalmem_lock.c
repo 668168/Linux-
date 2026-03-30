@@ -41,8 +41,10 @@ int globalmem_open(
         struct inode *inode,
         struct file *filp)
 {
-    /*  将设备结构体指针赋值给文件私有数据指针  */
-    filp->private_data = globalmem_devp;
+    /* 通过inode里的cdev反推出设备结构体 */
+    filp->private_data = container_of(inode->i_cdev,
+                                      struct globalmem_dev,
+                                      cdev);
 
     return 0;
 }
@@ -246,7 +248,7 @@ static void globalmem_setup_cdev(struct globalmem_dev *dev, int index)
 }
 
 /*设备驱动模块加载函数*/
-int globalmem_init(void)
+static int __init globalmem_init(void)
 {
     int result;
     dev_t devno = MKDEV(globalmem_major, 0);
@@ -286,7 +288,7 @@ int globalmem_init(void)
 }
 
 /*模块卸载函数*/
-void globalmem_exit(void)
+static void __exit globalmem_exit(void)
 {
     cdev_del(&globalmem_devp->cdev);   /*注销cdev*/
     kfree(globalmem_devp);     /*释放设备结构体内存*/
