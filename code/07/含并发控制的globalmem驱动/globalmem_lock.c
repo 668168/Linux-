@@ -37,7 +37,7 @@ struct globalmem_dev
 struct globalmem_dev    *globalmem_devp = NULL;     /*  设备结构体指针  */
 
 /*  文件打开函数  */
-int globalmem_open(
+static int globalmem_open(
         struct inode *inode,
         struct file *filp)
 {
@@ -50,7 +50,7 @@ int globalmem_open(
 }
 
 /*  文件释放函数    */
-int globalmem_release(struct inode *inode, struct file *filp)
+static int globalmem_release(struct inode *inode, struct file *filp)
 {
     return 0;
 }
@@ -136,7 +136,7 @@ static ssize_t globalmem_read(
         *ppos += count;
         ret = count;
 
-        printk(KERN_INFO "read %d bytes(s) from %d\n", count, p);
+        printk(KERN_INFO "read %u bytes(s) from %lu\n", count, p);
     }
 
     up(&dev->sem); //释放信号量
@@ -171,7 +171,7 @@ static ssize_t globalmem_write(struct file *filp, const char __user *buf,
       *ppos += count;
       ret = count;
 
-      printk(KERN_INFO "written %d bytes(s) from %d\n", count, p);
+      printk(KERN_INFO "written %u bytes(s) from %lu\n", count, p);
     }
     up(&dev->sem); //释放信号量
     return ret;
