@@ -113,6 +113,8 @@ Syncing rules:
 - Preserve technical accuracy over verbatim transcript style.
 - Preserve the user's original question text in `Question`; only make minimal cleanup if formatting would break the field.
 - Create a new page for every new user question instead of appending to a daily page.
+- Treat Notion sync as a required end-of-turn step for every answered user question in this repository.
+- Complete the Notion write before finishing the turn whenever the target database is available.
 - Run Notion syncing silently by default.
 - Do not mention successful Notion syncing in normal answers unless the user explicitly asks about it.
 - If the target database does not have `Question`, `Created`, or `Summary`, tell the user briefly and continue answering normally.
